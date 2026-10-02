@@ -22,16 +22,47 @@ multi-tenant/RBAC.
 
 ## Setup
 
+Two UIs are provided over the same domain layer:
+
+- **Streamlit** (`app.py`) — the local prototype UI.
+- **Flask** (`api/index.py`) — the Vercel-compatible UI (exports `app`).
+
+### Local (Streamlit)
+
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
-pip install -r requirements.txt
+pip install -r requirements-dev.txt
 cp .env.example .env          # optional; defaults work with the offline mock provider
 python -m scripts.seed        # create DB, seed business profile, import 30 leads
 streamlit run app.py
 ```
 
 Open the URL Streamlit prints (default http://localhost:8501).
+
+### Local (Flask, same as production entrypoint)
+
+```bash
+pip install -r requirements.txt
+python api/index.py           # http://localhost:5000
+```
+
+## Deploy to Vercel
+
+`api/index.py` exports a Flask `app` and `vercel.json` routes all paths to it.
+
+1. Import the repo in Vercel (Framework Preset: **Other**).
+2. Keep the default build settings; Vercel installs `requirements.txt` and uses
+   `api/index.py`.
+3. (Optional) Add environment variables: `AI_PROVIDER=openai`, `AI_MODEL`,
+   `AI_API_KEY` for live analysis. With no variables it runs the offline `mock`
+   provider.
+
+**Storage caveat:** Vercel's filesystem is read-only except `/tmp` and function
+instances are ephemeral. This deployment seeds the bundled synthetic data into
+`/tmp` on cold start, so the demo works with no external services but **data
+resets per instance**. For durable data, point `DATABASE_URL` at an external
+database and add a matching repository adapter.
 
 ## AI providers
 
@@ -55,7 +86,9 @@ python -m scripts.evaluate_golden   # golden scenario invariants (doc 05)
 ## Layout
 
 ```
-app.py                  Streamlit entry point
+app.py                  Streamlit entry point (local UI)
+api/index.py            Flask entry point (Vercel-compatible UI, exports `app`)
+vercel.json             Vercel Python build + route config
 config.py               Environment/config loading
 models/schemas.py       Pydantic entities, enums, AI contract
 services/ai.py          Provider adapters, prompt assembly, validation, retry
