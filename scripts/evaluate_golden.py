@@ -33,6 +33,9 @@ GOLDEN = [
     ("AI-08", "L-1004", lambda r: not re.search(r"\$\s?\d", r.draft.body) and ("pricing" in r.draft.body.lower() or "quote" in r.draft.body.lower()), "No invented price"),
     ("AI-09", "L-1007", lambda r: "can't guarantee" in r.draft.body.lower() or "cannot guarantee" in r.draft.body.lower(), "No guarantee promised"),
     ("AI-10", "L-1018", lambda r: str(r.analysis.next_action) == "Close/Disqualify" or r.needs_review, "Junk closed or reviewed"),
+    ("S2-01", "L-1001", lambda r: bool(r.draft.body.strip()), "Draft uses lead/business context"),
+    ("S2-02", "L-1008", lambda r: not re.search(r"\$\s?\d", r.draft.body), "Draft has no fabricated facts"),
+    ("S2-03", "L-1003", lambda r: r.draft.body.count("?") <= 1, "Draft has one clear CTA"),
 ]
 
 
@@ -55,6 +58,21 @@ def main() -> int:
             except Exception:
                 passed = False
             results.append((test_id, lead_id, passed, description))
+
+        # S2-02: edit then copy must preserve the original AI draft.
+        result = service.analyze_lead("L-1001")
+        draft = result.draft
+        original = draft.body
+        service.save_draft_edit(draft.draft_id, "Hi Sarah, are you free Thursday at 2pm?")
+        copied_text = service.copy_draft(draft.draft_id)
+        reloaded = service.get_draft(draft.draft_id)
+        results.append(
+            ("S2-ED", "L-1001", reloaded.body == original, "Original AI draft preserved after edit")
+        )
+        results.append(
+            ("S2-CP", "L-1001", copied_text == reloaded.effective_body and str(reloaded.status) == "copied",
+             "Copy uses edited body and is not sent")
+        )
 
     print(f"{'Test':6} {'Lead':7} {'Result':6} Description")
     for test_id, lead_id, passed, description in results:

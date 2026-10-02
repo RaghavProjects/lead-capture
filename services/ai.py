@@ -361,10 +361,10 @@ class MockAdapter(AIAdapter):
 
         if next_action == NextAction.ASK_CLARIFYING_QUESTION:
             body = (
-                f"Hi {first}, thanks for reaching out. To point you to the right thing, could you share a little "
-                f"more about what you're hoping to improve?\n\n"
-                f"For example, is this about responding to new leads faster, automating follow-up, or something "
-                f"else? Reply with a sentence and we'll take it from there.\n\n— {business}"
+                f"Hi {first}, thanks for reaching out. To point you to the right thing, could you share a "
+                f"sentence about what you're hoping to improve — for example, responding to new leads faster "
+                f"or automating follow-up?\n\n"
+                f"Reply and we'll take it from there.\n\n— {business}"
             )
             return subject, body
 

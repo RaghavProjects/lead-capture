@@ -69,16 +69,35 @@ def render_analysis(lead_id: str) -> None:
 
     if draft:
         st.subheader("Draft follow-up (not sent)")
-        st.text_input("Subject", value=draft.subject, key=f"subject_{draft.draft_id}")
-        current_body = draft.user_edited_body or draft.body
-        edited = st.text_area("Body", value=current_body, height=220, key=f"body_{draft.draft_id}")
-        if draft.user_edited_body:
-            st.caption("Showing your saved edit. The original AI draft is retained in the database.")
-        c1, c2 = st.columns([1, 3])
+        status_line = f"Status: {draft.status}"
+        if draft.copied_at:
+            status_line += f" · copied {draft.copied_at.isoformat()}"
+        st.caption(status_line)
+
+        st.text_input("Subject", value=draft.subject, key=f"subject_{draft.draft_id}", disabled=True)
+        current_body = draft.effective_body
+        edited = st.text_area("Your draft (editable)", value=current_body, height=220, key=f"body_{draft.draft_id}")
+
+        c1, c2 = st.columns([1, 1])
         if c1.button("Save edit", key=f"save_{draft.draft_id}"):
-            service.repo.update_draft_user_body(draft.draft_id, edited)
-            st.success("Your edit was saved separately; the original AI draft is preserved.")
-        c2.caption("Copy this draft into your own email tool. Nothing is sent by this app.")
+            try:
+                service.save_draft_edit(draft.draft_id, edited)
+                st.success("Edit saved. The original AI draft is preserved.")
+                st.rerun()
+            except LeadValidationError as exc:
+                st.error("; ".join(exc.errors))
+        if c2.button("Mark as copied", key=f"copy_{draft.draft_id}"):
+            service.copy_draft(draft.draft_id)
+            st.info("Recorded as copied. Nothing was sent — paste it into your own email tool.")
+            st.rerun()
+
+        with st.expander("Draft to copy (use the copy icon)"):
+            st.code(f"Subject: {draft.subject}\n\n{current_body}", language=None)
+        with st.expander("Original AI draft (read-only, always preserved)"):
+            st.text(draft.body)
+        if draft.is_edited:
+            st.caption("Showing your saved edit. The original AI draft is retained above.")
+        st.caption("This app never sends messages. Copy the draft into your own channel.")
 
     with st.expander("Activity history"):
         activities = service.repo.list_activities(lead_id)

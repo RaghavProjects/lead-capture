@@ -9,10 +9,12 @@ Human-in-the-loop, draft-only lead assistant. This repository implements
 | S1-02 | Manual lead entry | Done |
 | S1-03 | AI analysis with validated structured output | Done |
 | S1-04 | Risk flag detection and escalation | Done |
+| S2-01 | Personalized follow-up draft (context, one CTA, no fabrication) | Done |
+| S2-02 | Edit and copy draft; original preserved; copy never means sent | Done |
 
-Not yet built (later sprints): draft edit/copy workflow, Today attention queue,
-dashboard, activity-driven follow-up recalculation. The deterministic queue
-helpers already exist in `services/rules.py`.
+Not yet built (later sprints): Today attention queue, dashboard, activity-driven
+follow-up recalculation. The deterministic queue helpers already exist in
+`services/rules.py`.
 
 ## Setup
 

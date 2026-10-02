@@ -92,6 +92,14 @@ class Sentiment(StrEnum):
     MIXED = "Mixed"
 
 
+class DraftStatus(StrEnum):
+    """Draft lifecycle. V1 is draft-only: there is intentionally no 'sent' state."""
+
+    DRAFT = "draft"
+    EDITED = "edited"
+    COPIED = "copied"
+
+
 OPEN_STAGES = {Stage.NEW, Stage.CONTACTED, Stage.QUALIFIED, Stage.PROPOSAL_SENT, Stage.NURTURE}
 CLOSED_STAGES = {Stage.WON, Stage.LOST, Stage.NOT_A_LEAD}
 
@@ -218,9 +226,19 @@ class DraftMessage(BaseModel):
     channel: str = "email"
     subject: str
     body: str
-    status: str = "draft"
+    status: DraftStatus = DraftStatus.DRAFT
     user_edited_body: Optional[str] = None
+    copied_at: Optional[datetime] = None
     created_at: datetime = Field(default_factory=utc_now)
+
+    @property
+    def effective_body(self) -> str:
+        """Text a user would actually copy: their edit if present, else the AI draft."""
+        return self.user_edited_body or self.body
+
+    @property
+    def is_edited(self) -> bool:
+        return bool(self.user_edited_body) and self.user_edited_body != self.body
 
 
 class Activity(BaseModel):

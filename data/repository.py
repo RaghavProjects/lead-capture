@@ -13,6 +13,7 @@ from models.schemas import (
     AIAnalysis,
     BusinessProfile,
     DraftMessage,
+    DraftStatus,
     Lead,
     ResponseStatus,
     RiskFlag,
@@ -63,6 +64,7 @@ CREATE TABLE IF NOT EXISTS drafts (
     body TEXT NOT NULL,
     status TEXT NOT NULL,
     user_edited_body TEXT,
+    copied_at TEXT,
     created_at TEXT NOT NULL
 );
 
@@ -131,6 +133,14 @@ class SQLiteRepository:
     def init_db(self) -> None:
         with self._connect() as conn:
             conn.executescript(SCHEMA)
+            self._migrate(conn)
+
+    @staticmethod
+    def _migrate(conn: sqlite3.Connection) -> None:
+        """Lightweight forward-only migrations for existing prototype databases."""
+        columns = {row["name"] for row in conn.execute("PRAGMA table_info(drafts)")}
+        if "copied_at" not in columns:
+            conn.execute("ALTER TABLE drafts ADD COLUMN copied_at TEXT")
 
     # ------------------------------------------------------------------ leads
     def upsert_lead(self, lead: Lead) -> Lead:
@@ -300,13 +310,13 @@ class SQLiteRepository:
             conn.execute(
                 """
                 INSERT INTO drafts (draft_id, lead_id, analysis_id, channel, subject, body,
-                    status, user_edited_body, created_at)
-                VALUES (?,?,?,?,?,?,?,?,?)
+                    status, user_edited_body, copied_at, created_at)
+                VALUES (?,?,?,?,?,?,?,?,?,?)
                 """,
                 (
                     draft.draft_id, draft.lead_id, draft.analysis_id, draft.channel,
-                    draft.subject, draft.body, draft.status, draft.user_edited_body,
-                    _iso(draft.created_at),
+                    draft.subject, draft.body, str(draft.status), draft.user_edited_body,
+                    _iso(draft.copied_at), _iso(draft.created_at),
                 ),
             )
         return draft
@@ -321,8 +331,16 @@ class SQLiteRepository:
             body=row["body"],
             status=row["status"],
             user_edited_body=row["user_edited_body"],
+            copied_at=_dt(row["copied_at"]),
             created_at=_dt(row["created_at"]),
         )
+
+    def get_draft(self, draft_id: str) -> Optional[DraftMessage]:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM drafts WHERE draft_id = ?", (draft_id,)
+            ).fetchone()
+        return self._row_to_draft(row) if row else None
 
     def get_draft_for_analysis(self, analysis_id: str) -> Optional[DraftMessage]:
         with self._connect() as conn:
@@ -332,12 +350,28 @@ class SQLiteRepository:
             ).fetchone()
         return self._row_to_draft(row) if row else None
 
+    def list_drafts(self, lead_id: str) -> List[DraftMessage]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT * FROM drafts WHERE lead_id = ? ORDER BY created_at DESC",
+                (lead_id,),
+            ).fetchall()
+        return [self._row_to_draft(r) for r in rows]
+
     def update_draft_user_body(self, draft_id: str, user_edited_body: str) -> None:
         """Store the user edit separately; the original AI body is never overwritten."""
         with self._connect() as conn:
             conn.execute(
-                "UPDATE drafts SET user_edited_body = ?, status = 'edited' WHERE draft_id = ?",
-                (user_edited_body, draft_id),
+                "UPDATE drafts SET user_edited_body = ?, status = ? WHERE draft_id = ?",
+                (user_edited_body, str(DraftStatus.EDITED), draft_id),
+            )
+
+    def mark_draft_copied(self, draft_id: str, copied_at: datetime) -> None:
+        """Record that the user copied the draft. This never marks it as sent."""
+        with self._connect() as conn:
+            conn.execute(
+                "UPDATE drafts SET status = ?, copied_at = ? WHERE draft_id = ?",
+                (str(DraftStatus.COPIED), _iso(copied_at), draft_id),
             )
 
     # ------------------------------------------------------------- activities

@@ -13,6 +13,7 @@ from models.schemas import (
     BusinessProfile,
     Confidence,
     DraftMessage,
+    DraftStatus,
     Lead,
     ResponseStatus,
     Stage,
@@ -30,6 +31,10 @@ from services.ai import (
 
 
 class LeadNotFound(ValueError):
+    pass
+
+
+class DraftNotFound(ValueError):
     pass
 
 
@@ -162,6 +167,51 @@ class LeadService:
             needs_review=needs_review,
             risk_flags=merged_flags,
         )
+
+    # ----------------------------------------------------------------- drafts
+    def get_draft(self, draft_id: str) -> DraftMessage:
+        draft = self.repo.get_draft(draft_id)
+        if draft is None:
+            raise DraftNotFound(f"No draft with id {draft_id}")
+        return draft
+
+    def list_lead_drafts(self, lead_id: str) -> List[DraftMessage]:
+        return self.repo.list_drafts(lead_id)
+
+    def save_draft_edit(self, draft_id: str, user_edited_body: str) -> DraftMessage:
+        """Store the user's edit separately; the original AI draft is preserved."""
+        draft = self.get_draft(draft_id)
+        text = (user_edited_body or "").strip()
+        if not text:
+            raise LeadValidationError(["draft body must not be empty"])
+        self.repo.update_draft_user_body(draft_id, text)
+        self.repo.add_activity(
+            Activity(
+                lead_id=draft.lead_id,
+                activity_type="draft_edited",
+                notes="User edited the AI draft; original AI draft preserved",
+            )
+        )
+        return self.get_draft(draft_id)
+
+    def copy_draft(self, draft_id: str) -> str:
+        """Return the effective draft text and record a copy.
+
+        This only marks the draft as copied; it never sends anything and never
+        marks the draft as sent.
+        """
+        draft = self.get_draft(draft_id)
+        text = draft.effective_body
+        self.repo.mark_draft_copied(draft_id, utc_now())
+        self.repo.add_activity(
+            Activity(
+                lead_id=draft.lead_id,
+                activity_type="draft_copied",
+                outcome="Copied",
+                notes="Copied for the user's own channel; not sent by this app",
+            )
+        )
+        return text
 
     # ------------------------------------------------------------- activities
     def record_activity(
