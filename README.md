@@ -1,7 +1,7 @@
 # AI Lead Follow-Up Assistant (Prototype)
 
 Human-in-the-loop, draft-only lead assistant. This repository implements
-**Sprint 1** of the build kit:
+All four MVP sprints of the build kit:
 
 | Story | Feature | Status |
 |-------|---------|--------|
@@ -13,9 +13,12 @@ Human-in-the-loop, draft-only lead assistant. This repository implements
 | S2-02 | Edit and copy draft; original preserved; copy never means sent | Done |
 | S3-01 | Deterministic Today attention queue (overdue/due/new-hot/stale/review) | Done |
 | S3-02 | Record outcome; update state; recalculate next follow-up | Done |
+| S4-01 | Dashboard: filters, reconciled counts, click-through to lead detail | Done |
+| S4-02 | Business profile configuration with blank-profile warnings | Done |
 
-Not yet built (later sprint): dashboard with reconciled counts and click-through.
-The queue logic and counts already exist in `services/leads.py:list_attention_queue`.
+All four MVP sprints are implemented. Deferred to a future pilot (see PRD):
+CRM/email/calendar integrations, event-driven ingestion, autonomous sending,
+multi-tenant/RBAC.
 
 ## Setup
 

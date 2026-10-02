@@ -44,7 +44,7 @@ def lead_table_rows() -> list[dict]:
     return rows
 
 
-def render_analysis(lead_id: str) -> None:
+def render_analysis(lead_id: str, key_prefix: str = "leads") -> None:
     analysis = service.repo.get_latest_analysis(lead_id)
     if analysis is None:
         st.info("No AI analysis yet. Click **Analyze lead** to generate one.")
@@ -74,19 +74,19 @@ def render_analysis(lead_id: str) -> None:
             status_line += f" · copied {draft.copied_at.isoformat()}"
         st.caption(status_line)
 
-        st.text_input("Subject", value=draft.subject, key=f"subject_{draft.draft_id}", disabled=True)
+        st.text_input("Subject", value=draft.subject, key=f"subject_{key_prefix}_{draft.draft_id}", disabled=True)
         current_body = draft.effective_body
-        edited = st.text_area("Your draft (editable)", value=current_body, height=220, key=f"body_{draft.draft_id}")
+        edited = st.text_area("Your draft (editable)", value=current_body, height=220, key=f"body_{key_prefix}_{draft.draft_id}")
 
         c1, c2 = st.columns([1, 1])
-        if c1.button("Save edit", key=f"save_{draft.draft_id}"):
+        if c1.button("Save edit", key=f"save_{key_prefix}_{draft.draft_id}"):
             try:
                 service.save_draft_edit(draft.draft_id, edited)
                 st.success("Edit saved. The original AI draft is preserved.")
                 st.rerun()
             except LeadValidationError as exc:
                 st.error("; ".join(exc.errors))
-        if c2.button("Mark as copied", key=f"copy_{draft.draft_id}"):
+        if c2.button("Mark as copied", key=f"copy_{key_prefix}_{draft.draft_id}"):
             service.copy_draft(draft.draft_id)
             st.info("Recorded as copied. Nothing was sent — paste it into your own email tool.")
             st.rerun()
@@ -108,6 +108,85 @@ def render_analysis(lead_id: str) -> None:
             st.write(f"{stamp} — **{activity.activity_type}** {activity.outcome or ''} {activity.notes or ''}")
 
 
+def render_lead_detail(lead_id: str, key_prefix: str) -> None:
+    lead = service.get_lead(lead_id)
+    st.subheader(f"{lead.name} · {lead.company or '—'}")
+    st.write(
+        {
+            "Lead ID": lead.lead_id,
+            "Email": lead.email,
+            "Phone": lead.phone,
+            "Source": lead.source,
+            "Stage": str(lead.stage),
+            "Response status": str(lead.response_status),
+            "Received": lead.received_at.isoformat() if lead.received_at else "",
+            "Last contact": lead.last_contact_at.isoformat() if lead.last_contact_at else "",
+            "Next follow-up": lead.next_follow_up_at.isoformat() if lead.next_follow_up_at else "",
+            "Notes": lead.notes,
+        }
+    )
+    st.markdown(f"**Inquiry.** {lead.inquiry}")
+
+    if lead.needs_review:
+        st.warning(f"Needs review: {lead.review_reason or 'manual review required'}")
+
+    profile_warnings = service.profile_warnings()
+    if profile_warnings:
+        st.warning(
+            "Business profile is incomplete; drafts may be generic. "
+            "Update it in Settings: " + "; ".join(profile_warnings)
+        )
+
+    if st.button("Analyze lead", type="primary", key=f"analyze_{key_prefix}_{lead_id}"):
+        try:
+            result = service.analyze_lead(lead.lead_id)
+            if result.needs_review:
+                st.warning("Analysis complete — flagged for human review.")
+            else:
+                st.success("Analysis complete.")
+            st.rerun()
+        except LeadValidationError as exc:
+            st.error("Cannot analyze: " + "; ".join(exc.errors))
+        except AIUnavailable as exc:
+            st.error(f"Analysis unavailable. The lead was preserved and marked Needs Review. ({exc})")
+        except AnalysisValidationError as exc:
+            st.error(f"AI output failed validation. The lead was preserved and marked Needs Review. ({exc})")
+
+    render_analysis(lead_id, key_prefix)
+
+    with st.expander("Record outcome", expanded=False):
+        activity_type = st.selectbox(
+            "Activity",
+            ["Email sent", "Call", "Meeting", "Note", "Proposal sent", "No response"],
+            key=f"activity_{key_prefix}_{lead_id}",
+        )
+        outcome = st.text_input("Outcome", key=f"outcome_{key_prefix}_{lead_id}")
+        notes = st.text_area("Notes", height=80, key=f"notes_{key_prefix}_{lead_id}")
+        new_stage = st.selectbox(
+            "Update stage", ["(unchanged)"] + [str(s) for s in Stage], key=f"stage_{key_prefix}_{lead_id}"
+        )
+        new_status = st.selectbox(
+            "Update response status",
+            ["(unchanged)"] + [str(s) for s in ResponseStatus],
+            key=f"status_{key_prefix}_{lead_id}",
+        )
+        if st.button("Save activity", key=f"save_{key_prefix}_{lead_id}"):
+            _, next_follow_up = service.record_outcome(
+                lead.lead_id,
+                activity_type,
+                outcome=outcome or None,
+                notes=notes or None,
+                stage=Stage(new_stage) if new_stage != "(unchanged)" else None,
+                response_status=ResponseStatus(new_status) if new_status != "(unchanged)" else None,
+                update_contact=activity_type != "Note",
+            )
+            if next_follow_up:
+                st.success(f"Activity recorded. Next follow-up recalculated: {next_follow_up.date().isoformat()}.")
+            else:
+                st.success("Activity recorded. Lead is closed; no follow-up scheduled.")
+            st.rerun()
+
+
 st.title("AI Lead Follow-Up Assistant")
 st.caption("Human-in-the-loop, draft-only prototype. Nothing is sent automatically.")
 
@@ -127,8 +206,8 @@ with st.sidebar:
         st.warning("Demo data cleared.")
         st.rerun()
 
-tab_today, tab_leads, tab_import, tab_new, tab_settings = st.tabs(
-    ["Today", "Leads", "Import", "New lead", "Settings"]
+tab_today, tab_dashboard, tab_leads, tab_import, tab_new, tab_settings = st.tabs(
+    ["Today", "Dashboard", "Leads", "Import", "New lead", "Settings"]
 )
 
 with tab_today:
@@ -162,6 +241,70 @@ with tab_today:
         )
     st.caption("Won / Lost / Not a Lead leads are excluded from all attention buckets.")
 
+with tab_dashboard:
+    st.subheader("Pipeline dashboard")
+    f1, f2, f3, f4 = st.columns(4)
+    stage_f = f1.selectbox("Stage", ["All"] + [str(s) for s in Stage], key="dash_stage")
+    priority_f = f2.selectbox("Priority", ["All", "High", "Medium", "Low"], key="dash_priority")
+    source_f = f3.selectbox("Source", ["All"] + service.available_sources(), key="dash_source")
+    review_f = f4.selectbox("Review", ["All", "Needs review", "OK"], key="dash_review")
+    search_f = st.text_input("Search", key="dash_search")
+
+    filters = dict(
+        search=search_f or None,
+        stage=None if stage_f == "All" else stage_f,
+        priority=priority_f,
+        source=source_f,
+        needs_review={"All": None, "Needs review": True, "OK": False}[review_f],
+    )
+    leads = service.filtered_leads(**filters)
+    summary = service.pipeline_summary(**filters)
+
+    m1, m2, m3 = st.columns(3)
+    m1.metric("Filtered leads", summary["total"])
+    m2.metric("Needs review", summary["needs_review"])
+    m3.metric("Unanalyzed", summary["by_priority"].get("Unanalyzed", 0))
+
+    c1, c2 = st.columns(2)
+    with c1:
+        st.markdown("**By priority**")
+        st.dataframe(
+            [{"Priority": k, "Count": v} for k, v in sorted(summary["by_priority"].items())],
+            use_container_width=True, hide_index=True,
+        )
+    with c2:
+        st.markdown("**By stage**")
+        st.dataframe(
+            [{"Stage": k, "Count": v} for k, v in sorted(summary["by_stage"].items())],
+            use_container_width=True, hide_index=True,
+        )
+
+    st.markdown(f"**Filtered leads ({len(leads)})**")
+    st.dataframe(
+        [
+            {
+                "Lead ID": lead.lead_id,
+                "Name": lead.name,
+                "Company": lead.company or "",
+                "Stage": str(lead.stage),
+                "Priority": str(service._priority_of(lead) or ""),
+                "Source": lead.source or "",
+                "Needs review": "Yes" if lead.needs_review else "",
+            }
+            for lead in leads
+        ],
+        use_container_width=True,
+        hide_index=True,
+    )
+    st.caption("Counts and the table are derived from the same filtered set, so they always reconcile.")
+
+    if leads:
+        options = {f"{lead.lead_id} — {lead.name}": lead.lead_id for lead in leads}
+        selected = st.selectbox("Open lead detail", list(options.keys()), key="dash_open")
+        render_lead_detail(options[selected], key_prefix="dash")
+    else:
+        st.info("No leads match the current filters.")
+
 with tab_leads:
     search = st.text_input("Search leads", placeholder="Name, company or inquiry")
     stage_filter = st.selectbox("Stage", ["All"] + [str(s) for s in Stage])
@@ -181,67 +324,7 @@ with tab_leads:
         selected_label = st.selectbox("Open a lead", list(options.keys()))
         selected_id = options[selected_label]
         lead = service.get_lead(selected_id)
-
-        st.subheader(f"{lead.name} · {lead.company or '—'}")
-        st.write(
-            {
-                "Lead ID": lead.lead_id,
-                "Email": lead.email,
-                "Phone": lead.phone,
-                "Source": lead.source,
-                "Stage": str(lead.stage),
-                "Response status": str(lead.response_status),
-                "Received": lead.received_at.isoformat() if lead.received_at else "",
-                "Last contact": lead.last_contact_at.isoformat() if lead.last_contact_at else "",
-                "Next follow-up": lead.next_follow_up_at.isoformat() if lead.next_follow_up_at else "",
-                "Notes": lead.notes,
-            }
-        )
-        st.markdown(f"**Inquiry.** {lead.inquiry}")
-
-        if lead.needs_review:
-            st.warning(f"Needs review: {lead.review_reason or 'manual review required'}")
-
-        if st.button("Analyze lead", type="primary"):
-            try:
-                result = service.analyze_lead(lead.lead_id)
-                if result.needs_review:
-                    st.warning("Analysis complete — flagged for human review.")
-                else:
-                    st.success("Analysis complete.")
-                st.rerun()
-            except LeadValidationError as exc:
-                st.error("Cannot analyze: " + "; ".join(exc.errors))
-            except AIUnavailable as exc:
-                st.error(f"Analysis unavailable. The lead was preserved and marked Needs Review. ({exc})")
-            except AnalysisValidationError as exc:
-                st.error(f"AI output failed validation. The lead was preserved and marked Needs Review. ({exc})")
-
-        render_analysis(selected_id)
-
-        with st.expander("Record outcome"):
-            activity_type = st.selectbox(
-                "Activity", ["Email sent", "Call", "Meeting", "Note", "Proposal sent", "No response"]
-            )
-            outcome = st.text_input("Outcome")
-            notes = st.text_area("Notes", height=80)
-            new_stage = st.selectbox("Update stage", ["(unchanged)"] + [str(s) for s in Stage])
-            new_status = st.selectbox("Update response status", ["(unchanged)"] + [str(s) for s in ResponseStatus])
-            if st.button("Save activity"):
-                activity, next_follow_up = service.record_outcome(
-                    lead.lead_id,
-                    activity_type,
-                    outcome=outcome or None,
-                    notes=notes or None,
-                    stage=Stage(new_stage) if new_stage != "(unchanged)" else None,
-                    response_status=ResponseStatus(new_status) if new_status != "(unchanged)" else None,
-                    update_contact=activity_type != "Note",
-                )
-                if next_follow_up:
-                    st.success(f"Activity recorded. Next follow-up recalculated: {next_follow_up.date().isoformat()}.")
-                else:
-                    st.success("Activity recorded. Lead is closed; no follow-up scheduled.")
-                st.rerun()
+        render_lead_detail(lead.lead_id, key_prefix="leads")
 
 with tab_import:
     st.subheader("Import leads from CSV or XLSX")
@@ -297,6 +380,11 @@ with tab_new:
 
 with tab_settings:
     st.subheader("Business profile")
+    if service.profile_warnings():
+        st.warning(
+            "Profile incomplete; drafts may be generic. Missing: "
+            + "; ".join(service.profile_warnings())
+        )
     profile = service.get_business_profile()
     with st.form("profile"):
         business_name = st.text_input("Business name", value=profile.business_name)

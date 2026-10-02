@@ -1,6 +1,7 @@
 """Application service coordinating leads, rules, AI analysis and persistence."""
 from __future__ import annotations
 
+from collections import Counter
 from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional
 
@@ -85,6 +86,52 @@ class LeadService:
     def list_leads(self, search: Optional[str] = None, stage: Optional[str] = None,
                    priority: Optional[str] = None) -> List[Lead]:
         return self.repo.list_leads(search=search, stage=stage, priority=priority)
+
+    # ------------------------------------------------------------- dashboard
+    def _priority_of(self, lead: Lead) -> Optional[Priority]:
+        analysis = self.repo.get_latest_analysis(lead.lead_id)
+        return analysis.priority if analysis else None
+
+    def available_sources(self) -> List[str]:
+        return sorted({lead.source or "Unknown" for lead in self.repo.list_leads()})
+
+    def filtered_leads(
+        self,
+        search: Optional[str] = None,
+        stage: Optional[str] = None,
+        priority: Optional[str] = None,
+        source: Optional[str] = None,
+        needs_review: Optional[bool] = None,
+    ) -> List[Lead]:
+        """Single filtered lead list used by both the table and the summary.
+
+        Because the dashboard counts are derived from this same list, the counts
+        always reconcile with what the user sees (S4-01).
+        """
+        leads = self.repo.list_leads(search=search, stage=stage)
+        if source and source != "All":
+            leads = [lead for lead in leads if (lead.source or "Unknown") == source]
+        if needs_review is not None:
+            leads = [lead for lead in leads if lead.needs_review is needs_review]
+        if priority and priority != "All":
+            leads = [lead for lead in leads if str(self._priority_of(lead) or "") == priority]
+        return leads
+
+    def pipeline_summary(self, **filters) -> Dict[str, object]:
+        leads = self.filtered_leads(**filters)
+        return {
+            "total": len(leads),
+            "by_stage": dict(Counter(str(lead.stage) for lead in leads)),
+            "by_priority": dict(Counter(str(self._priority_of(lead) or "Unanalyzed") for lead in leads)),
+            "by_source": dict(Counter(lead.source or "Unknown" for lead in leads)),
+            "needs_review": sum(1 for lead in leads if lead.needs_review),
+        }
+
+    def profile_warnings(self) -> List[str]:
+        """Human-readable warnings when the business profile is incomplete (S4-02)."""
+        profile = self.get_business_profile()
+        labels = {"business_name": "business name", "description": "description", "services": "services"}
+        return [labels.get(field, field) for field in profile.missing_core_fields()]
 
     # --------------------------------------------------------------- analysis
     def analyze_lead(self, lead_id: str) -> AnalysisResult:

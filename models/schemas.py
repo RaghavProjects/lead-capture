@@ -133,6 +133,9 @@ class Lead(BaseModel):
         return str(v).strip()
 
 
+BUSINESS_PROFILE_CORE_FIELDS = ("business_name", "description", "services")
+
+
 class BusinessProfile(BaseModel):
     business_name: str = "Northstar Growth Studio"
     description: str = (
@@ -152,6 +155,17 @@ class BusinessProfile(BaseModel):
         "New high-intent lead: same/next business day; normal inquiry: within 2 business "
         "days; proposal: 2-3 business days; honor explicit customer timing."
     )
+
+    def missing_core_fields(self) -> List[str]:
+        return [
+            field
+            for field in BUSINESS_PROFILE_CORE_FIELDS
+            if not str(getattr(self, field, "") or "").strip()
+        ]
+
+    @property
+    def is_configured(self) -> bool:
+        return not self.missing_core_fields()
 
 
 class AIAnalysisOutput(BaseModel):
