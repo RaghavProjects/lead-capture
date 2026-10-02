@@ -127,7 +127,40 @@ with st.sidebar:
         st.warning("Demo data cleared.")
         st.rerun()
 
-tab_leads, tab_import, tab_new, tab_settings = st.tabs(["Leads", "Import", "New lead", "Settings"])
+tab_today, tab_leads, tab_import, tab_new, tab_settings = st.tabs(
+    ["Today", "Leads", "Import", "New lead", "Settings"]
+)
+
+with tab_today:
+    st.subheader("Today — who needs attention")
+    queue = service.list_attention_queue()
+    metric_cols = st.columns(len(queue.counts))
+    for col, (name, count) in zip(metric_cols, queue.counts.items()):
+        col.metric(name, count)
+
+    for name in ["Overdue", "Due Today", "New Hot Lead", "Stale", "Needs Review"]:
+        entries = queue.buckets.get(name, [])
+        if not entries:
+            continue
+        st.markdown(f"#### {name} ({len(entries)})")
+        st.dataframe(
+            [
+                {
+                    "Lead ID": e.lead.lead_id,
+                    "Name": e.lead.name,
+                    "Company": e.lead.company or "",
+                    "Stage": str(e.lead.stage),
+                    "Priority": str(e.analysis.priority) if e.analysis else "",
+                    "Next action": str(e.analysis.next_action) if e.analysis else "",
+                    "Follow-up": e.follow_up_at.date().isoformat() if e.follow_up_at else "",
+                    "Reason": ", ".join(e.queues),
+                }
+                for e in entries
+            ],
+            use_container_width=True,
+            hide_index=True,
+        )
+    st.caption("Won / Lost / Not a Lead leads are excluded from all attention buckets.")
 
 with tab_leads:
     search = st.text_input("Search leads", placeholder="Name, company or inquiry")
@@ -160,6 +193,7 @@ with tab_leads:
                 "Response status": str(lead.response_status),
                 "Received": lead.received_at.isoformat() if lead.received_at else "",
                 "Last contact": lead.last_contact_at.isoformat() if lead.last_contact_at else "",
+                "Next follow-up": lead.next_follow_up_at.isoformat() if lead.next_follow_up_at else "",
                 "Notes": lead.notes,
             }
         )
@@ -194,15 +228,19 @@ with tab_leads:
             new_stage = st.selectbox("Update stage", ["(unchanged)"] + [str(s) for s in Stage])
             new_status = st.selectbox("Update response status", ["(unchanged)"] + [str(s) for s in ResponseStatus])
             if st.button("Save activity"):
-                service.record_activity(
+                activity, next_follow_up = service.record_outcome(
                     lead.lead_id,
                     activity_type,
                     outcome=outcome or None,
                     notes=notes or None,
                     stage=Stage(new_stage) if new_stage != "(unchanged)" else None,
                     response_status=ResponseStatus(new_status) if new_status != "(unchanged)" else None,
+                    update_contact=activity_type != "Note",
                 )
-                st.success("Activity recorded.")
+                if next_follow_up:
+                    st.success(f"Activity recorded. Next follow-up recalculated: {next_follow_up.date().isoformat()}.")
+                else:
+                    st.success("Activity recorded. Lead is closed; no follow-up scheduled.")
                 st.rerun()
 
 with tab_import:

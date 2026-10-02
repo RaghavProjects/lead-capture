@@ -1,8 +1,8 @@
 """Application service coordinating leads, rules, AI analysis and persistence."""
 from __future__ import annotations
 
-from datetime import timedelta
-from typing import List, Optional
+from datetime import datetime, timedelta, timezone
+from typing import Dict, List, Optional
 
 from config import Settings, settings
 from data.repository import SQLiteRepository
@@ -10,11 +10,15 @@ from models.schemas import (
     Activity,
     AIAnalysis,
     AnalysisResult,
+    AttentionQueue,
     BusinessProfile,
+    CLOSED_STAGES,
     Confidence,
     DraftMessage,
     DraftStatus,
     Lead,
+    Priority,
+    QueueEntry,
     ResponseStatus,
     Stage,
     utc_now,
@@ -152,6 +156,7 @@ class LeadService:
         elif output.confidence == Confidence.LOW:
             reason = "Low AI confidence; please review"
         self.repo.set_review_state(lead_id, needs_review, reason)
+        self.repo.set_next_follow_up(lead_id, follow_up_at)
         self.repo.add_activity(
             Activity(
                 lead_id=lead_id,
@@ -212,6 +217,85 @@ class LeadService:
             )
         )
         return text
+
+    # ------------------------------------------------------- attention queue
+    def list_attention_queue(self, today: Optional[datetime] = None) -> AttentionQueue:
+        """Deterministic Today queue (S3-01). Closed stages are always excluded."""
+        reference = today or utc_now()
+        order = ["Overdue", "Due Today", "New Hot Lead", "Stale", "Needs Review"]
+        buckets: Dict[str, List[QueueEntry]] = {name: [] for name in order}
+
+        for lead in self.repo.list_leads():
+            if lead.stage in CLOSED_STAGES:
+                continue
+            analysis = self.repo.get_latest_analysis(lead.lead_id)
+            queues = rules.classify_queues(
+                lead,
+                analysis,
+                stale_days=self.app_settings.stale_days,
+                window_hours=self.app_settings.new_lead_window_hours,
+                today=reference,
+            )
+            if not queues:
+                continue
+            entry = QueueEntry(
+                lead=lead,
+                analysis=analysis,
+                queues=queues,
+                follow_up_at=rules.effective_follow_up(lead, analysis),
+            )
+            for queue_name in queues:
+                buckets[queue_name].append(entry)
+
+        priority_rank = {Priority.HIGH: 0, Priority.MEDIUM: 1, Priority.LOW: 2}
+
+        def _follow_up_key(entry: QueueEntry):
+            return entry.follow_up_at or datetime.max.replace(tzinfo=timezone.utc)
+
+        buckets["Overdue"].sort(key=_follow_up_key)
+        buckets["Due Today"].sort(key=_follow_up_key)
+        buckets["New Hot Lead"].sort(key=lambda e: e.lead.received_at, reverse=True)
+        buckets["Stale"].sort(key=lambda e: (e.lead.last_contact_at or e.lead.received_at))
+        buckets["Needs Review"].sort(
+            key=lambda e: priority_rank.get(
+                e.analysis.priority if e.analysis else Priority.MEDIUM, 1
+            )
+        )
+
+        counts = {name: len(items) for name, items in buckets.items()}
+        return AttentionQueue(generated_at=reference, buckets=buckets, counts=counts)
+
+    # ------------------------------------------------------------- outcomes
+    def recalculate_follow_up(self, lead_id: str, last_outcome: Optional[str] = None):
+        lead = self.get_lead(lead_id)
+        analysis = self.repo.get_latest_analysis(lead_id)
+        next_follow_up = rules.recalculate_next_follow_up(lead, analysis, last_outcome)
+        self.repo.set_next_follow_up(lead_id, next_follow_up)
+        return next_follow_up
+
+    def record_outcome(
+        self,
+        lead_id: str,
+        activity_type: str,
+        outcome: Optional[str] = None,
+        notes: Optional[str] = None,
+        stage: Optional[Stage] = None,
+        response_status: Optional[ResponseStatus] = None,
+        update_contact: bool = True,
+    ):
+        """Record what happened after follow-up, update lead state, and recalculate (S3-02)."""
+        self.get_lead(lead_id)  # raise if missing
+        activity = self.record_activity(
+            lead_id,
+            activity_type,
+            outcome=outcome,
+            notes=notes,
+            stage=stage,
+            response_status=response_status,
+            update_contact=update_contact,
+        )
+        next_follow_up = self.recalculate_follow_up(lead_id, last_outcome=outcome)
+        return activity, next_follow_up
 
     # ------------------------------------------------------------- activities
     def record_activity(

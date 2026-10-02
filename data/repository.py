@@ -35,7 +35,8 @@ CREATE TABLE IF NOT EXISTS leads (
     response_status TEXT NOT NULL,
     notes TEXT,
     needs_review INTEGER NOT NULL DEFAULT 0,
-    review_reason TEXT
+    review_reason TEXT,
+    next_follow_up_at TEXT
 );
 
 CREATE TABLE IF NOT EXISTS analyses (
@@ -142,6 +143,10 @@ class SQLiteRepository:
         if "copied_at" not in columns:
             conn.execute("ALTER TABLE drafts ADD COLUMN copied_at TEXT")
 
+        lead_columns = {row["name"] for row in conn.execute("PRAGMA table_info(leads)")}
+        if "next_follow_up_at" not in lead_columns:
+            conn.execute("ALTER TABLE leads ADD COLUMN next_follow_up_at TEXT")
+
     # ------------------------------------------------------------------ leads
     def upsert_lead(self, lead: Lead) -> Lead:
         with self._connect() as conn:
@@ -149,21 +154,22 @@ class SQLiteRepository:
                 """
                 INSERT INTO leads (lead_id, name, company, email, phone, source, inquiry,
                     stage, received_at, last_contact_at, response_status, notes,
-                    needs_review, review_reason)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                    needs_review, review_reason, next_follow_up_at)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                 ON CONFLICT(lead_id) DO UPDATE SET
                     name=excluded.name, company=excluded.company, email=excluded.email,
                     phone=excluded.phone, source=excluded.source, inquiry=excluded.inquiry,
                     stage=excluded.stage, received_at=excluded.received_at,
                     last_contact_at=excluded.last_contact_at,
                     response_status=excluded.response_status, notes=excluded.notes,
-                    needs_review=excluded.needs_review, review_reason=excluded.review_reason
+                    needs_review=excluded.needs_review, review_reason=excluded.review_reason,
+                    next_follow_up_at=excluded.next_follow_up_at
                 """,
                 (
                     lead.lead_id, lead.name, lead.company, lead.email, lead.phone,
                     lead.source, lead.inquiry, str(lead.stage), _iso(lead.received_at),
                     _iso(lead.last_contact_at), str(lead.response_status), lead.notes,
-                    int(lead.needs_review), lead.review_reason,
+                    int(lead.needs_review), lead.review_reason, _iso(lead.next_follow_up_at),
                 ),
             )
         return lead
@@ -191,6 +197,7 @@ class SQLiteRepository:
             notes=row["notes"],
             needs_review=bool(row["needs_review"]),
             review_reason=row["review_reason"],
+            next_follow_up_at=_dt(row["next_follow_up_at"]),
         )
 
     def get_lead(self, lead_id: str) -> Optional[Lead]:
@@ -232,6 +239,13 @@ class SQLiteRepository:
             conn.execute(
                 "UPDATE leads SET needs_review = ?, review_reason = ? WHERE lead_id = ?",
                 (int(needs_review), reason, lead_id),
+            )
+
+    def set_next_follow_up(self, lead_id: str, next_follow_up_at: Optional[datetime]) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                "UPDATE leads SET next_follow_up_at = ? WHERE lead_id = ?",
+                (_iso(next_follow_up_at), lead_id),
             )
 
     def update_lead_stage(self, lead_id: str, stage: Stage, response_status: Optional[ResponseStatus] = None,

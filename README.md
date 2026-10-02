@@ -11,10 +11,11 @@ Human-in-the-loop, draft-only lead assistant. This repository implements
 | S1-04 | Risk flag detection and escalation | Done |
 | S2-01 | Personalized follow-up draft (context, one CTA, no fabrication) | Done |
 | S2-02 | Edit and copy draft; original preserved; copy never means sent | Done |
+| S3-01 | Deterministic Today attention queue (overdue/due/new-hot/stale/review) | Done |
+| S3-02 | Record outcome; update state; recalculate next follow-up | Done |
 
-Not yet built (later sprints): Today attention queue, dashboard, activity-driven
-follow-up recalculation. The deterministic queue helpers already exist in
-`services/rules.py`.
+Not yet built (later sprint): dashboard with reconciled counts and click-through.
+The queue logic and counts already exist in `services/leads.py:list_attention_queue`.
 
 ## Setup
 

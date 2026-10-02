@@ -231,6 +231,7 @@ def _build_lead(mapped: Dict[str, Any], seen_ids: set, row_number: int) -> Lead:
         raise ValueError("Missing or invalid Date Received")
 
     last_contact = parse_date(mapped.get("last_contact_at"))
+    next_follow_up = parse_date(mapped.get("follow_up_date"))
 
     try:
         response_status = _parse_response_status(mapped.get("response_status"))
@@ -258,6 +259,7 @@ def _build_lead(mapped: Dict[str, Any], seen_ids: set, row_number: int) -> Lead:
         last_contact_at=last_contact,
         response_status=response_status,
         notes=_clean(mapped.get("notes")),
+        next_follow_up_at=next_follow_up,
     )
 
 

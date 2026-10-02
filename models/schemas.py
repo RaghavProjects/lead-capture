@@ -8,7 +8,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timezone
 from enum import Enum
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -122,6 +122,8 @@ class Lead(BaseModel):
     # Internal review state (not part of the imported schema)
     needs_review: bool = False
     review_reason: Optional[str] = None
+    # Mutable next follow-up date, recalculated after recorded outcomes
+    next_follow_up_at: Optional[datetime] = None
 
     @field_validator("name", "inquiry")
     @classmethod
@@ -255,3 +257,18 @@ class AnalysisResult(BaseModel):
     draft: DraftMessage
     needs_review: bool
     risk_flags: List[RiskFlag]
+
+
+class QueueEntry(BaseModel):
+    lead: Lead
+    analysis: Optional[AIAnalysis] = None
+    queues: List[str] = Field(default_factory=list)
+    follow_up_at: Optional[datetime] = None
+
+
+class AttentionQueue(BaseModel):
+    """Ordered attention buckets for a given day (S3-01)."""
+
+    generated_at: datetime = Field(default_factory=utc_now)
+    buckets: Dict[str, List[QueueEntry]] = Field(default_factory=dict)
+    counts: Dict[str, int] = Field(default_factory=dict)

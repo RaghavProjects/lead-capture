@@ -16,6 +16,7 @@ from models.schemas import (
     Lead,
     NextAction,
     Priority,
+    ResponseStatus,
     RiskFlag,
     Stage,
 )
@@ -112,16 +113,35 @@ def _today(today: Optional[datetime] = None) -> datetime:
     return now
 
 
+def effective_follow_up(lead: Lead, analysis: Optional[AIAnalysis]) -> Optional[datetime]:
+    """The next follow-up date to use for queue logic.
+
+    A recorded outcome may recalculate the date on the lead; otherwise fall back
+    to the date recommended by the latest analysis.
+    """
+    if lead.next_follow_up_at is not None:
+        return lead.next_follow_up_at
+    if analysis is not None:
+        return analysis.follow_up_at
+    return None
+
+
 def is_overdue(lead: Lead, analysis: Optional[AIAnalysis], today: Optional[datetime] = None) -> bool:
-    if lead.stage in CLOSED_STAGES or analysis is None:
+    if lead.stage in CLOSED_STAGES:
         return False
-    return analysis.follow_up_at.date() < _today(today).date()
+    follow_up = effective_follow_up(lead, analysis)
+    if follow_up is None:
+        return False
+    return follow_up.date() < _today(today).date()
 
 
 def is_due_today(lead: Lead, analysis: Optional[AIAnalysis], today: Optional[datetime] = None) -> bool:
-    if lead.stage in CLOSED_STAGES or analysis is None:
+    if lead.stage in CLOSED_STAGES:
         return False
-    return analysis.follow_up_at.date() == _today(today).date()
+    follow_up = effective_follow_up(lead, analysis)
+    if follow_up is None:
+        return False
+    return follow_up.date() == _today(today).date()
 
 
 def is_new_hot(lead: Lead, analysis: Optional[AIAnalysis], window_hours: int = 48,
@@ -151,7 +171,7 @@ def needs_review(lead: Lead, analysis: Optional[AIAnalysis]) -> bool:
     if lead.needs_review:
         return True
     if analysis is None:
-        return True
+        return False
     if analysis.confidence == "Low":
         return True
     return has_risk(analysis.risk_flags)
@@ -171,3 +191,27 @@ def classify_queues(lead: Lead, analysis: Optional[AIAnalysis], *, stale_days: i
     if needs_review(lead, analysis):
         queues.append("Needs Review")
     return queues
+
+
+def recalculate_next_follow_up(
+    lead: Lead,
+    analysis: Optional[AIAnalysis],
+    last_outcome: Optional[str] = None,
+    today: Optional[datetime] = None,
+) -> Optional[datetime]:
+    """Deterministically recompute the next follow-up date (S3-02).
+
+    Returns ``None`` for closed leads (no follow-up should be scheduled).
+    """
+    if lead.stage in CLOSED_STAGES:
+        return None
+    priority = analysis.priority if analysis else Priority.MEDIUM
+    action = analysis.next_action if analysis else NextAction.RESPOND
+
+    if last_outcome and "no response" in last_outcome.lower():
+        days = 7
+    elif lead.response_status == ResponseStatus.RESPONDED and priority == Priority.HIGH:
+        days = 1
+    else:
+        days = default_follow_up_days(priority, action)
+    return _today(today) + timedelta(days=days)
